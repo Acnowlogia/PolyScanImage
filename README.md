@@ -20,6 +20,9 @@ Image Processing Toolbox<br />
 3. Load 'configData\Configuration.mat' into matlab workspace, then replace value of 'CFG Files Directory' to full path of your 'configData' folder, and save the updated variable back to 'configData\Configuration.mat'.<br />
 4. Type 'polyscanimage' into Matlab command window, then PolyScanImage start.<br />
 
+## Developer
+This package is developed by Jianian Lin (lin1203@purdue.edu).
+
 ## License
 Copyright (c) 2022 Jianian Lin
 
