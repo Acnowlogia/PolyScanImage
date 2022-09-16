@@ -1,48 +1,56 @@
-function focus_PSI(obj)
+function grab_PSI(obj)
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 % Created by Jianian Lin
 % Date created: 10/19/2021
-% FOCUS function of polyscanimage
-% focus_PSI(app)
+% GRAB function of polyscanimage
+% grab_PSI(app)
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 AlazarDefs;
-run(obj.hMain.UserSettingsEditField.Value);
+run(obj.hMain.UserSettingsEditField.Value); 
 
 % Stop output until preparation finished
-obj.hBeams.stopOutputBeam;
-obj.hWfms.stopOutputWfm;
+obj.hBeams.stopOutputBeam; 
+obj.hWfms.stopOutputWfm; 
 
 % Connect Alazar board
-boardHandle = obj.hMain.hBoard;
+boardHandle = obj.hMain.hBoard; 
 
 % Parameters
 %	Main controls
-zoom = obj.hMain.ZoomDropDown.Value;
+zoom = obj.hMain.ZoomDropDown.Value; 
 framesPerAcquisition = obj.hMain.TotalFrameEditField.Value; 
-offset = uint16(obj.hMain.offset);
-avg = obj.hMain.AvgEditField.Value;
+framesPerFile = obj.hMain.FramesPerFileEditField.Value; 
+offset = uint16(obj.hMain.offset); 
 % 	Configuration controls
-pixelsPerLine = obj.hConfig.PixelsPerLineEditField.Value;
+pixelsPerLine = obj.hConfig.PixelsPerLineEditField.Value; 
 linesPerFrame = obj.hConfig.LinesPerFrameEditField.Value; 
-trigFreq = obj.hConfig.trigFreq;
+trigFreq = obj.hConfig.trigFreq; 
 scanPhase = obj.hConfig.ScanPhaseEditField.Value; 
-fillFraction = obj.hConfig.FillFractionEditField.Value;
-preTriggerSamples = zoom * floor(pixelsPerLine / 2 * fillFraction) - round(scanPhase / 360 * (pixelsPerLine * zoom));
-postTriggerSamples = zoom * floor(pixelsPerLine / 2 * fillFraction) + round(scanPhase / 360 * (pixelsPerLine * zoom));
+fillFraction = obj.hConfig.FillFractionEditField.Value; 
+preTriggerSamples = zoom * floor(pixelsPerLine / 2 * fillFraction) - round(scanPhase / 360 * (pixelsPerLine * zoom)); 
+postTriggerSamples = zoom * floor(pixelsPerLine / 2 * fillFraction) + round(scanPhase / 360 * (pixelsPerLine * zoom)); 
 samplesPerRecord = preTriggerSamples + postTriggerSamples;
 %   Images controls
-channelMask = obj.hImage.channelMask_Disp;
-channelCount = obj.hImage.channelCount_Disp;
+channelMask = obj.hImage.channelMask_Save; 
+channelCount = obj.hImage.channelCount_Save; 
 if obj.hImage.Channel1DispCheckBox.Value
     white = obj.hImage.Channel1WhiteEditField.Value; 
     black = obj.hImage.Channel1BlackEditField.Value; 
-    invert = obj.hImage.Channel1InvertCheckBox.Value; 
+    invert1 = obj.hImage.Channel1InvertCheckBox.Value; 
+    invert2 = obj.hImage.Channel2InvertCheckBox.Value; 
 else
     white = obj.hImage.Channel2WhiteEditField.Value; 
     black = obj.hImage.Channel2BlackEditField.Value; 
-    invert = obj.hImage.Channel2InvertCheckBox.Value; 
+    invert1 = obj.hImage.Channel1InvertCheckBox.Value; 
+    invert2 = obj.hImage.Channel2InvertCheckBox.Value; 
 end
+
+% Utilize default output size limit when frames/file = inf
+if isinf(framesPerFile)
+    framesPerFile = floor(maxDataSize / (linesPerFrame*pixelsPerLine*channelCount*2));
+end
+filesPerAcquisition = ceil(framesPerAcquisition / framesPerFile); 
 
 % Fast Stage Imaging?
 if obj.hWfms.FastStageimagingCheckBox.Value
@@ -61,17 +69,17 @@ end
 % Specifiy the total number of buffers to capture
 buffersPerFrame = linesPerFrame / zoom / recordsPerBuffer;
 if buffersPerFrame < 1
-    recordsPerBuffer = (linesPerFrame / zoom) * ceil(recordsPerBuffer / (linesPerFrame / zoom)); 
-    buffersPerFrame = linesPerFrame / zoom / recordsPerBuffer; 
+    recordsPerBuffer = (linesPerFrame / zoom) * ceil(recordsPerBuffer / (linesPerFrame / zoom));
+    buffersPerFrame = linesPerFrame / zoom / recordsPerBuffer;
 elseif buffersPerFrame ~= floor(buffersPerFrame)
     buffersPerFrame = floor(buffersPerFrame); 
     linesPerFrame = zoom * recordsPerBuffer * buffersPerFrame; 
     obj.hConfig.LinesPerFrameEditField.Value = linesPerFrame; 
     obj.updateAll;
 end
-
-buffersPerAcquisition = 2^16;	% Set as large as possible when focusing
-obj.hMain.TotalFrameEditField.Value = inf; 
+buffersPerAcquisition = ceil(buffersPerFrame * framesPerAcquisition);
+framesPerAcquisition = buffersPerAcquisition / buffersPerFrame;
+obj.hMain.TotalFrameEditField.Value = framesPerAcquisition; 
 
 % Get the sample and memory size
 [retCode,boardHandle,maxSamplesPerRecord,bitsPerSample] = calllib('ATSApi','AlazarGetChannelInfo',boardHandle,0,0); 
@@ -116,8 +124,13 @@ lineShift = lineShift(8/zoom:8/zoom:end);
 if isempty(obj.hImage.chanDispFigure) || ~isvalid(obj.hImage.chanDispFigure)
     obj.hImage.update;
 end
-Plot = obj.hImage.chanDispFigure;
-Plot.Children.CLim = [black,white]; 
+Plot = obj.hImage.chanDispFigure; 
+if isempty(white) || isempty(Plot) || ~isvalid(Plot)
+    updatePlot = false;
+else
+    updatePlot = true;
+    Plot.Children.CLim = [black,white]; 
+end
 
 % TODO: Select AutoDMA flags as required
 % ADMA_EXTERNAL_STARTCAPTURE - call AlazarStartCapture to begin the acquisition
@@ -161,12 +174,27 @@ updateTickCount = tic;
 updateInterval_sec = 0.1; 
 buffersCompleted = 0; 
 framesCompleted = 0; 
+filesCompleted = 0;
 captureDone = false; 
 buffersInFrame = 1; 
 linesInFrame = 0; 
-frameDisplayed = 0; 
-frameNeedAvg = 1; 
-temp = zeros(pixelsPerLine,linesPerFrame,avg,'uint16');
+framesInFile = 0;
+
+
+if obj.hMain.saveCheckBox.Value
+    filename = [obj.hMain.path_Data,obj.hMain.BasenameEditField.Value,'_',num2str(obj.hMain.AcquisitionEditField.Value,'%05d')];
+    fTifList = cell(filesPerAcquisition,1);
+    fTifList{1} = tiffwrite_PSI([filename,'.tif']); 
+    for k = 2 : filesPerAcquisition
+        fTifList{k} = tiffwrite_PSI([filename,'-',num2str(k,'%03d'),'.tif']); 
+    end
+    fTif = fTifList{1};
+    if buffersPerFrame >= 1
+        temp = zeros(pixelsPerLine,linesPerFrame,channelCount,'uint16');
+    else
+        temp = zeros(pixelsPerLine,linesPerFrame,1/buffersPerFrame*channelCount,'uint16');
+    end
+end
 
 tic
 while ~captureDone
@@ -195,31 +223,66 @@ while ~captureDone
     
     % Process sample data in this buffer
     if bufferFull
-        setdatatype(bufferOut, 'uint16Ptr', 1, samplesPerBuffer); 
+        setdatatype(bufferOut, 'uint16Ptr', channelCount, samplesPerBuffer/channelCount); 
         data = bufferOut.Value; 
-        if invert
-            data = offset - data; 
+        if invert1
+            data(1,:) = offset - data(1,:); 
         else
-            data = data - offset; 
+            data(1,:) = data(1,:) - offset; 
+        end
+        if invert2
+            data(2,:) = offset - data(2,:); 
+        else
+            data(2,:) = data(2,:) - offset; 
         end
         data = data2image(data,pixelsPerLine,zoom,samplesPerRecord,recordsPerBuffer,channelCount,lineShift);
-        data = data(:,:,1);
-        
 
         if buffersPerFrame <= 1
+            if obj.hMain.saveCheckBox.Value
+                temp = reshape(data,pixelsPerLine,linesPerFrame,[]);
+                for k = 1 : (1/buffersPerFrame)
+                    framesInFile = framesInFile + 1; 
+                    for j = 0 : channelCount-1
+                        fTif.write(temp(:,:,k+j/buffersPerFrame)); 
+                    end
+                    if framesInFile >= framesPerFile
+                        filesCompleted = filesCompleted + 1; 
+                        framesInFile = 0; 
+                        if filesCompleted < filesPerAcquisition
+                            fTif = fTifList{filesCompleted+1}; 
+                        end
+                    end
+                end
+            end
             if toc > 0.1
-                temp(:,:,frameNeedAvg) = data(:,1:linesPerFrame); 
-                Plot.CurrentAxes.Children.CData = mean(temp,3).';
+                if updatePlot
+                    Plot.CurrentAxes.Children.CData = data(:,1:linesPerFrame).'; 
+                end
                 drawnow limitrate
                 tic
             end
         else
-            temp(:,linesInFrame+1:linesInFrame+size(data,2),frameNeedAvg) = data;
-            Plot.CurrentAxes.Children.CData = mean(temp,3).';
+            temp(linesInFrame+1:linesInFrame+size(data,2),:,:) = data; 
+            if updatePlot
+                Plot.CurrentAxes.Children.CData(linesInFrame+1:linesInFrame+size(data,2),:) = data(:,:,1).'; 
+            end
             drawnow limitrate
             linesInFrame = linesInFrame + size(data,2); 
             if linesInFrame == linesPerFrame
                 linesInFrame = 0; 
+                if obj.hMain.saveCheckBox.Value
+                    framesInFile = framesInFile + 1; 
+                    for j = 1 : channelCount
+                        fTif.write(temp(:,:,j)); 
+                    end
+                    if framesInFile >= framesPerFile
+                        filesCompleted = filesCompleted + 1; 
+                        framesInFile = 0; 
+                        if filesCompleted < filesPerAcquisition
+                            fTif = fTifList{filesCompleted+1}; 
+                        end
+                    end
+                end
             end
         end
         
@@ -229,21 +292,19 @@ while ~captureDone
             fprintf('Error: AlazarPostAsyncBuffer failed -- %s\n', errorToText(retCode));
             captureDone = true;
         end
-        
+
         % Update progress
         if buffersPerFrame > 1
             buffersInFrame = buffersInFrame + 1;
             if buffersInFrame == buffersPerFrame
                 buffersInFrame = 0;
-                framesCompleted = framesCompleted + 1;
-                frameNeedAvg = mod(frameNeedAvg + 1,avg) + 1;
+                framesCompleted = framesCompleted + 1; 
                 if fastStage
                     stayFrames = stayFrames + 1;
                 end
             end
         else
-            framesCompleted = framesCompleted + 1 / buffersPerFrame;
-            frameNeedAvg = mod(frameNeedAvg + 1,avg) + 1;
+            framesCompleted = framesCompleted + 1 / buffersPerFrame; 
             if fastStage
                 stayFrames = stayFrames + 1 / buffersPerFrame; 
             end
@@ -262,12 +323,26 @@ while ~captureDone
             captureDone = true;
         elseif toc(updateTickCount) > updateInterval_sec
             updateTickCount = tic;
-            if obj.hMain.FOCUSButton.Value == 0
+            if obj.hMain.GRABButton.Value == 0
                 break
             end
         end
     end % if bufferFull
 end % while ~captureDone
+
+if obj.hMain.saveCheckBox.Value
+    % Close file
+    for k = 1 : filesPerAcquisition
+        fTifList{k}.close
+    end
+    
+    % Attach info file for special imaging
+    if fastStage
+        fastStageInfo{1} = 'Fast Stage Data';
+        fastStageInfo{2} = fastStageData;
+        save([filename,'_FastStageInfo','.mat'],'fastStageInfo');
+    end
+end
 
 % Abort the acquisition
 retCode = calllib('ATSApi', 'AlazarAbortAsyncRead',boardHandle);
@@ -288,12 +363,11 @@ end
 % Stop wavefroms output and finish panel update
 obj.hBeams.stopOutputBeam;
 obj.hWfms.stopOutputWfm;
-obj.hMain.TotalFrameEditField.Value = framesPerAcquisition;
-obj.hStimulate.stopStimulation
+obj.hStimulate.stopStimulation;
 
-obj.hMain.FOCUSButton.Text = 'FOCUS';
-obj.hMain.FOCUSButton.Value = 0;
-obj.hMain.GRABButton.Visible = true;
-obj.hMain.LOOPButton.Visible = true;
+obj.hMain.GRABButton.Text = 'GRAB'; 
+obj.hMain.GRABButton.Value = 0; 
+obj.hMain.FOCUSButton.Visible = true; 
+obj.hMain.LOOPButton.Visible = true; 
 
 end
